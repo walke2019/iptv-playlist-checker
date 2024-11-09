@@ -44,7 +44,7 @@ jobs:
 
       - name: Download playlist to check 📥
         run: |
-          wget $PLAYLIST_URL -O playlist.m3u8
+          wget -nv $PLAYLIST_URL -O playlist.m3u8
         env:
           PLAYLIST_URL: ${{ inputs.PLAYLIST_URL }}    
 
