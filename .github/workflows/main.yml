@@ -50,7 +50,7 @@ jobs:
 
       - name: Download script and check playlist 📺    
         run: |
-          python iptvcheck.py -p playlist.m3u8 -s playlistchecked.m3u8 -t $NUM_THREADS -o $TIMEOUT
+          python iptvcheck.py -p playlist.m3u8 -s playlistchecked.m3u8 -t $NUM_THREADS -ft $TIMEOUT
         env:
           NUM_THREADS: ${{ inputs.NUM_THREADS }}
           TIMEOUT: ${{ inputs.TIMEOUT }}  
