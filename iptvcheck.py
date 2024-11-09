@@ -193,7 +193,7 @@ def get_unique_filename(directory: str, filename: str) -> str:
 
 
 def add_extm3u_line(content: str) -> str:
-    return "#EXTM3U url-tvg=\"http://iptvx.one/epg/epg.xml.gz\"\n" + content
+    return "#EXTM3U\n" + content
 
 
 def process_playlist(playlist: str, save_file: Optional[str], num_threads: int = NUM_THREADS, ffmpeg_timeout: int = FFMPEG_TIMEOUT):
