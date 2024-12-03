@@ -1,6 +1,10 @@
-# MIT License
-#
-# Copyright (c) 2024 soverxpro and MustardChef
+# THIS CODE/WORK IS LICENSED UNDER THE GNU Affero General Public License v3.0 (GNU AGPLv3)
+# Copyright (c) 2024 MustardChef
+# THE GNU AGPLv3 LICENSE APPLICABLE TO THIS CODE/WORK CAN BE FOUND IN THE LICENSE FILE IN THE ROOT DIRECTORY OF THIS REPOSITORY
+
+
+# ORIGINAL CODE LICENSE: MIT License
+# Copyright (c) 2024 soverxpro
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -8,7 +12,6 @@
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
 #
