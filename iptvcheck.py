@@ -1,27 +1,7 @@
+# IPTVCheck v1.0
 # THIS CODE/WORK IS LICENSED UNDER THE GNU Affero General Public License v3.0 (GNU AGPLv3)
-# Copyright (c) 2024 MustardChef
-# THE GNU AGPLv3 LICENSE APPLICABLE TO THIS CODE/WORK CAN BE FOUND IN THE LICENSE FILE IN THE ROOT DIRECTORY OF THIS REPOSITORY
-
-
-# ORIGINAL CODE LICENSE: MIT License
-# Copyright (c) 2024 soverxpro
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
+# Copyright (c) 2025 MustardChef
+# THE GNU AGPLv3 LICENSE APPLICABLE TO THIS CODE/WORK CAN BE FOUND IN THE LICENSE FILE IN THE ROOT DIRECTORY OF THIS GITHUB REPOSITORY
 
 
 import os, requests, argparse, logging, concurrent.futures, subprocess, time, signal, sys, threading, urllib3, shutil
@@ -123,6 +103,42 @@ def check_dependencies():
 cache = {}
 
 
+def parse_playlist(content: str) -> list:
+    """Parse playlist content into a structured format handling various M3U extensions."""
+    lines = content.splitlines()
+    channels = []
+    current_channel = None
+    
+    for line in lines:
+        line = line.strip()
+        
+        if not line or line == "#EXTM3U":
+            continue
+            
+        if line.startswith("#EXTINF:"):
+            # Start a new channel entry
+            current_channel = {
+                'extinf': line,
+                'url': None,
+                'options': []
+            }
+            channels.append(current_channel)
+            
+        elif line.startswith(("#EXTVLCOPT:", "#KODIPROP:", "#EXTGRP:", "#EXTLOGO:")):
+            # Store additional directives
+            if current_channel:
+                current_channel['options'].append(line)
+                
+        elif line.startswith("http://") or line.startswith("https://") or line.startswith("rtmp://") or \
+             line.startswith("rtsp://") or line.startswith("mms://") or line.startswith("udp://"):
+            # This is a URL
+            if current_channel:
+                current_channel['url'] = line
+    
+    # Filter out channels without URLs
+    return [ch for ch in channels if ch['url']]
+
+
 def check_stream(url: str, channel_name: str, headers: Optional[dict] = None, ffmpeg_timeout: int = FFMPEG_TIMEOUT) -> Tuple[bool, Optional[str]]:
     """Validate stream against URL using ffmpeg and HTTP request. Returns a tuple (success, error) for logging."""
     if url in cache:
@@ -132,28 +148,156 @@ def check_stream(url: str, channel_name: str, headers: Optional[dict] = None, ff
         try:
             logging.debug(f"Checking stream: {channel_name} ({url}) with headers: {headers}) - Attempt {attempt + 1}")
 
+            # First check with direct HTTP request
+            http_success = False
             if url.startswith('http://') or url.startswith('https://'):
-                response = requests.head(url, headers=headers, timeout=15, verify=False)
-                if response.status_code != 200:
-                    stats.failed += 1
-                    cache[url] = (False, f"Invalid status code: {response.status_code}")
-                    return False, f"Invalid status code: {response.status_code}"
+                try:
+                    response = requests.head(url, headers=headers, timeout=15, verify=False)
+                    if response.status_code == 200:
+                        http_success = True
+                    else:
+                        # Some IPTV servers don't support HEAD requests, try GET instead
+                        response = requests.get(url, headers=headers, timeout=15, verify=False, stream=True)
+                        response.close()  # Close stream immediately to avoid downloading too much data
+                        if response.status_code == 200:
+                            http_success = True
+                        else:
+                            logging.warning(f"HTTP request failed for {channel_name} with status code: {response.status_code}")
+                except requests.RequestException as e:
+                    logging.warning(f"HTTP request failed for {channel_name}: {e}")
+            
+            # If HTTP check passed, try a more lenient ffmpeg test
+            if http_success:
+                ffmpeg_timeout_reduced = min(ffmpeg_timeout, 10)  # Reduce timeout for quicker checks when HTTP succeeded
+            else:
+                ffmpeg_timeout_reduced = ffmpeg_timeout
 
-            ffmpeg_command = ['ffmpeg', '-i', url, '-t', '5', '-f', 'null', '-']
-            result = subprocess.run(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=ffmpeg_timeout)
+            # Build ffmpeg command with all necessary headers
+            ffmpeg_command = ['ffmpeg']
+            
+            # Add headers to ffmpeg correctly
+            if headers:
+                # Add user agent if present
+                if 'User-Agent' in headers:
+                    ffmpeg_command.extend(['-user_agent', headers['User-Agent']])
+                
+                # Build headers string for other headers
+                header_str = ""
+                for key, value in headers.items():
+                    if key not in ['User-Agent'] and key and value:  # Include Referer in header string
+                        # Convert header name to Title-Case for consistency
+                        formatted_key = '-'.join(word.capitalize() for word in key.split('-'))
+                        header_str += f"{formatted_key}: {value}\r\n"
+                
+                # Only add headers parameter if we have headers to add
+                if header_str:
+                    ffmpeg_command.extend(['-headers', header_str])
+            
+            # Add quiet mode to reduce noise and add stream URL
+            ffmpeg_command.extend([
+                '-loglevel', 'warning',
+                '-reconnect', '1',
+                '-reconnect_streamed', '1',
+                '-reconnect_delay_max', '5',
+                '-i', url,
+                '-t', '3',  # Just check first 3 seconds
+                '-f', 'null', 
+                '-'
+            ])
+            
+            logging.debug(f"Running ffmpeg command: {' '.join(ffmpeg_command)}")
+            result = subprocess.run(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=ffmpeg_timeout_reduced)
+            
             if result.returncode == 0:
                 stats.working += 1
                 cache[url] = (True, None)
                 return True, None
-            else:
+                
+            # First attempt failed - let's try alternative approaches
+            error_output = result.stderr.decode('utf-8', errors='ignore')
+            logging.debug(f"ffmpeg error output: {error_output}")
+            
+            # Try with ffprobe instead - sometimes more lenient
+            if attempt == 0:
+                try:
+                    ffprobe_cmd = ['ffprobe']
+                    
+                    # Add user agent if present
+                    if headers and 'User-Agent' in headers:
+                        ffprobe_cmd.extend(['-user_agent', headers['User-Agent']])
+                    
+                    # Add headers
+                    if headers:
+                        header_str = ""
+                        for key, value in headers.items():
+                            if key != 'User-Agent' and key and value:
+                                formatted_key = '-'.join(word.capitalize() for word in key.split('-'))
+                                header_str += f"{formatted_key}: {value}\r\n"
+                        
+                        if header_str:
+                            ffprobe_cmd.extend(['-headers', header_str])
+                    
+                    ffprobe_cmd.extend([
+                        '-v', 'error',
+                        '-show_entries', 'format=duration',
+                        '-of', 'default=noprint_wrappers=1:nokey=1',
+                        '-i', url
+                    ])
+                    
+                    probe_result = subprocess.run(ffprobe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=ffmpeg_timeout_reduced)
+                    if probe_result.returncode == 0 or (probe_result.stdout and float(probe_result.stdout.strip() or 0) > 0):
+                        stats.working += 1
+                        cache[url] = (True, None)
+                        return True, None
+                except Exception as e:
+                    logging.debug(f"ffprobe check failed: {e}")
+                
+                # Try curl as a last resort for HTTP streams
+                if url.startswith(('http://', 'https://')) and headers:
+                    try:
+                        curl_cmd = ['curl', '-s', '-I', '-L']
+                        
+                        # Add headers to curl
+                        for key, value in headers.items():
+                            curl_cmd.extend(['-H', f"{key}: {value}"])
+                        
+                        curl_cmd.append(url)
+                        curl_result = subprocess.run(curl_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+                        
+                        if curl_result.returncode == 0 and b"200 OK" in curl_result.stdout:
+                            stats.working += 1
+                            cache[url] = (True, None)
+                            return True, None
+                    except Exception as e:
+                        logging.debug(f"curl check failed: {e}")
+            
+            # All attempts failed - determine error reason
+            error_reason = "Stream does not work"
+            
+            # Try to extract more specific error message
+            if "403 Forbidden" in error_output:
+                error_reason = "Access forbidden (403)"
+            elif "404 Not Found" in error_output:
+                error_reason = "Stream not found (404)"
+            elif "401 Unauthorized" in error_output:
+                error_reason = "Authentication required (401)"
+            elif "Protocol not found" in error_output:
+                error_reason = "Protocol not supported"
+            elif "Connection refused" in error_output:
+                error_reason = "Connection refused"
+            elif "Unable to open resource" in error_output:
+                error_reason = "Unable to open resource"
+            
+            # Only mark as failed on last retry attempt
+            if attempt == RETRY_COUNT:
                 stats.failed += 1
-                cache[url] = (False, "Stream does not work")
-                return False, "Stream does not work"
+                cache[url] = (False, error_reason)
+                return False, error_reason
 
         except subprocess.TimeoutExpired:
             logging.error(f"ffmpeg timeout for {channel_name} (attempt {attempt + 1})")
-            stats.timeout += 1
             if attempt == RETRY_COUNT:
+                stats.timeout += 1
                 cache[url] = (False, "ffmpeg timeout")
                 return False, "ffmpeg timeout"
 
@@ -171,7 +315,9 @@ def check_stream(url: str, channel_name: str, headers: Optional[dict] = None, ff
                 stats.failed += 1
                 cache[url] = (False, "General error")
                 return False, "General error"
-
+            
+        # Small delay between retries
+        time.sleep(2)
 
 def simplify_error(error_message: str) -> str:
     error_map = {
@@ -212,7 +358,7 @@ def process_playlist(playlist: str, save_file: Optional[str], num_threads: int =
             sys.exit(1)
     else:
         try:
-            with open(playlist, 'r', encoding='utf-8') as f:
+            with open(playlist, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
         except FileNotFoundError:
             logging.error(f"File {playlist} not found")
@@ -221,42 +367,59 @@ def process_playlist(playlist: str, save_file: Optional[str], num_threads: int =
             logging.error(f"Error reading file {playlist}: {e}")
             sys.exit(1)
 
-    content = add_extm3u_line(content)
-    lines = content.splitlines()
-    updated_lines = []
+    # Make sure content has the #EXTM3U header
+    if not content.strip().startswith("#EXTM3U"):
+        content = "#EXTM3U\n" + content
+
+    # Parse the playlist content
+    channels = parse_playlist(content)
+    
+    logging.info(f"Found {len(channels)} channels in the playlist")
+    print(f"{Fore.CYAN}Found {len(channels)} channels in the playlist{Style.RESET_ALL}")
+    
+    updated_lines = ["#EXTM3U"]  # Start with the M3U header
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-        future_to_url = {}
-        num_channels = len([line for line in lines if line.startswith("#EXTINF")])
-        pbar = tqdm(total=num_channels, desc="Checking channels", ncols=100, colour="green")
+        future_to_channel = {}
+        pbar = tqdm(total=len(channels), desc="Checking channels", ncols=100, colour="green")
 
-        for i, line in enumerate(lines):
-            if line.startswith("#EXTINF"):
-                if i + 1 < len(lines) and lines[i + 1].startswith('http'):
-                    url = lines[i + 1]
-                    channel_name = line.split(",")[-1]
-                    headers = {}
-                    future = executor.submit(check_stream, url, channel_name, headers, ffmpeg_timeout)
-                    future_to_url[future] = (line, url)
+        # Process each channel
+        for channel in channels:
+            url = channel['url']
+            channel_name = extract_channel_name(channel['extinf'])
+            
+            # Extract headers from options
+            headers = extract_headers_from_options(channel['options'])
+                
+            future = executor.submit(check_stream, url, channel_name, headers, ffmpeg_timeout)
+            future_to_channel[future] = channel
 
         try:
-            for future in concurrent.futures.as_completed(future_to_url):
-                extinf_line, url = future_to_url[future]
+            for future in concurrent.futures.as_completed(future_to_channel):
+                channel = future_to_channel[future]
+                channel_name = extract_channel_name(channel['extinf'])
+                
                 try:
                     success, error = future.result()
                     if success:
-                        updated_lines.append(extinf_line)
-                        updated_lines.append(url)
-                        print(f"{Fore.GREEN}[SUCCESS] {extinf_line.split(',')[-1]}{Style.RESET_ALL}")
+                        # Add this channel to the updated playlist
+                        updated_lines.append(channel['extinf'])
+                        for option in channel['options']:
+                            updated_lines.append(option)
+                        updated_lines.append(channel['url'])
+                        print(f"{Fore.GREEN}[SUCCESS] {channel_name}{Style.RESET_ALL}")
                     else:
-                        print(f"{Fore.RED}[FAIL] {extinf_line.split(',')[-1]} - {error}{Style.RESET_ALL}")
-                        logging.error(f"Failed to play {url}: {error}")
+                        print(f"{Fore.RED}[FAIL] {channel_name} - {error}{Style.RESET_ALL}")
+                        logging.error(f"Failed to play {channel['url']}: {error}")
                 except concurrent.futures.TimeoutError:
                     with lock:
-                        print(f"{Fore.YELLOW}[SKIPPED] {extinf_line.split(',')[-1]} - Took too long{Style.RESET_ALL}")
+                        print(f"{Fore.YELLOW}[SKIPPED] {channel_name} - Took too long{Style.RESET_ALL}")
                         stats.skipped += 1
                         with open(SKIPPED_FILE_PATH, 'a', encoding='utf-8') as f:
-                            f.write(f"{extinf_line}\n{url}\n")
+                            f.write(f"{channel['extinf']}\n")
+                            for option in channel['options']:
+                                f.write(f"{option}\n")
+                            f.write(f"{channel['url']}\n")
                 pbar.update(1)
 
         except concurrent.futures.TimeoutError:
@@ -274,22 +437,150 @@ def process_playlist(playlist: str, save_file: Optional[str], num_threads: int =
     stats.print_summary()
 
 
-def process_files_in_directory(input_dir: str, output_dir: str, num_threads: int = NUM_THREADS, ffmpeg_timeout: int = FFMPEG_TIMEOUT):
-    input_files = [f for f in os.listdir(input_dir) if f.endswith('.m3u') or f.endswith('.m3u8')]
+def extract_channel_name(extinf_line: str) -> str:
+    """Extract channel name from EXTINF line."""
+    if ',' in extinf_line:
+        return extinf_line.split(',', 1)[1].strip()
+    return "Unknown"
 
-    logging.info(f"Found {len(input_files)} playlists in directory.")
 
-    for playlist in input_files:
-        input_path = os.path.join(input_dir, playlist)
-        save_path = os.path.join(output_dir, get_unique_filename(output_dir, playlist))
-
-        logging.info(f"Processing file: {input_path}")
-
-        stats.reset()  # Reset statistics for each playlist if separate statistics are required
-        process_playlist(input_path, save_path, num_threads, ffmpeg_timeout)
-
-        logging.info(f"Finished processing file: {input_path}")
-
+def extract_headers_from_options(options: list) -> dict:
+    """Extract all possible headers from channel options."""
+    headers = {}
+    
+    for option in options:
+        option_lower = option.lower()
+        
+        # VLC options (most common)
+        if option.startswith('#EXTVLCOPT:http-user-agent='):
+            headers['User-Agent'] = option[27:].strip()
+        elif option.startswith('#EXTVLCOPT:http-referrer='):
+            headers['Referer'] = option[25:].strip()
+        elif option.startswith('#EXTVLCOPT:http-origin='):
+            headers['Origin'] = option[21:].strip()
+        elif option.startswith('#EXTVLCOPT:http-header='):
+            header_line = option[22:].strip()
+            if ':' in header_line:
+                key, value = header_line.split(':', 1)
+                headers[key.strip()] = value.strip()
+        # Generic VLC options format
+        elif option.startswith('#EXTVLCOPT:'):
+            option_value = option[11:].strip()
+            if option_value.startswith('http-'):
+                parts = option_value.split('=', 1)
+                if len(parts) == 2:
+                    header_name = parts[0].replace('http-', '')
+                    # Convert to standard header name
+                    if header_name.lower() == 'user-agent':
+                        header_name = 'User-Agent'
+                    elif header_name.lower() == 'referrer':
+                        header_name = 'Referer'
+                    elif header_name.lower() == 'origin':
+                        header_name = 'Origin'
+                    else:
+                        # Convert header name to standard format (Title-Case)
+                        header_name = '-'.join(word.capitalize() for word in header_name.split('-'))
+                    headers[header_name] = parts[1].strip()
+                
+        # Kodi properties
+        elif option.startswith('#KODIPROP:inputstream.adaptive.stream_headers='):
+            header_part = option[43:].strip()
+            for header_pair in header_part.split('&'):
+                if '=' in header_pair:
+                    key, value = header_pair.split('=', 1)
+                    # Convert common header names to standard format
+                    key = key.strip()
+                    if key.lower() == 'user-agent':
+                        headers['User-Agent'] = value.strip()
+                    elif key.lower() == 'referer' or key.lower() == 'referrer':
+                        headers['Referer'] = value.strip() 
+                    elif key.lower() == 'origin':
+                        headers['Origin'] = value.strip()
+                    else:
+                        # Convert to proper header case
+                        key = '-'.join(word.capitalize() for word in key.split('-'))
+                        headers[key] = value.strip()
+        
+        # Generic Kodi properties that might contain headers
+        elif option.startswith('#KODIPROP:'):
+            if '=' in option:
+                prop, value = option[10:].split('=', 1)
+                prop = prop.strip().lower()
+                value = value.strip()
+                
+                if prop == 'user-agent':
+                    headers['User-Agent'] = value
+                elif prop in ('referer', 'referrer'):
+                    headers['Referer'] = value
+                elif prop == 'origin':
+                    headers['Origin'] = value
+                elif prop.endswith('.useragent'):
+                    headers['User-Agent'] = value
+                elif prop == 'http-user-agent':
+                    headers['User-Agent'] = value
+                elif prop == 'http-referrer' or prop == 'http-referer':
+                    headers['Referer'] = value
+                elif prop == 'http-origin':
+                    headers['Origin'] = value
+        
+        # Check for headers in the EXTINF line (common in some playlists)
+        elif option.startswith('#EXTINF:'):
+            # Extract User-Agent
+            if 'user-agent=' in option_lower:
+                ua_start = option_lower.find('user-agent=')
+                if ua_start > 0:
+                    ua_part = option[ua_start + 11:]
+                    # Extract the user agent value (might be quoted or up to next space or comma)
+                    if ua_part.startswith('"'):
+                        end_quote = ua_part.find('"', 1)
+                        if end_quote > 0:
+                            headers['User-Agent'] = ua_part[1:end_quote]
+                    elif ' ' in ua_part:
+                        headers['User-Agent'] = ua_part.split(' ', 1)[0]
+                    elif ',' in ua_part:
+                        headers['User-Agent'] = ua_part.split(',', 1)[0]
+                    else:
+                        headers['User-Agent'] = ua_part
+            
+            # Extract Referer
+            if 'referrer=' in option_lower or 'referer=' in option_lower:
+                ref_keyword = 'referrer=' if 'referrer=' in option_lower else 'referer='
+                ref_start = option_lower.find(ref_keyword)
+                if ref_start > 0:
+                    ref_part = option[ref_start + len(ref_keyword):]
+                    # Extract the referrer value
+                    if ref_part.startswith('"'):
+                        end_quote = ref_part.find('"', 1)
+                        if end_quote > 0:
+                            headers['Referer'] = ref_part[1:end_quote]
+                    elif ' ' in ref_part:
+                        headers['Referer'] = ref_part.split(' ', 1)[0]
+                    elif ',' in ref_part:
+                        headers['Referer'] = ref_part.split(',', 1)[0]
+                    else:
+                        headers['Referer'] = ref_part
+            
+            # Extract Origin (added)
+            if 'origin=' in option_lower:
+                origin_start = option_lower.find('origin=')
+                if origin_start > 0:
+                    origin_part = option[origin_start + 7:]
+                    if origin_part.startswith('"'):
+                        end_quote = origin_part.find('"', 1)
+                        if end_quote > 0:
+                            headers['Origin'] = origin_part[1:end_quote]
+                    elif ' ' in origin_part:
+                        headers['Origin'] = origin_part.split(' ', 1)[0]
+                    elif ',' in origin_part:
+                        headers['Origin'] = origin_part.split(',', 1)[0]
+                    else:
+                        headers['Origin'] = origin_part
+    
+    # Simple logging to see what headers were found
+    if headers:
+        logging.debug(f"Extracted headers: {headers}")
+    
+    return headers
 
 def main():
     parser = argparse.ArgumentParser(description="IPTV playlist checker")
