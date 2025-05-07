@@ -606,7 +606,7 @@ def process_url_list(config_file: str, output_dir: str, num_threads: int, ffmpeg
     """处理配置文件中的URL列表"""
     if not os.path.exists(config_file):
         print(f"{Fore.RED}配置文件 {config_file} 不存在!{Style.RESET_ALL}")
-        return
+        return False
 
     os.makedirs(output_dir, exist_ok=True)
     
@@ -615,14 +615,17 @@ def process_url_list(config_file: str, output_dir: str, num_threads: int, ffmpeg
             urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
     except Exception as e:
         print(f"{Fore.RED}读取配置文件失败: {e}{Style.RESET_ALL}")
-        return
+        return False
 
     if not urls:
         print(f"{Fore.YELLOW}配置文件中未找到有效的URL。{Style.RESET_ALL}")
-        return
+        return False
 
     total_urls = len(urls)
     print(f"{Fore.CYAN}共找到 {total_urls} 个播放列表URL{Style.RESET_ALL}")
+
+    success_count = 0
+    failed_urls = []
 
     for index, url in enumerate(urls, 1):
         try:
@@ -634,11 +637,57 @@ def process_url_list(config_file: str, output_dir: str, num_threads: int, ffmpeg
                 filename = f"playlist_{index}.m3u8"
             
             output_path = os.path.join(output_dir, f"checked_{filename}")
-            process_playlist(url, output_path, num_threads, ffmpeg_timeout)
             
+            try:
+                # 尝试下载播放列表
+                response = requests.get(url, timeout=30, verify=False)
+                response.raise_for_status()
+                content = response.text
+                
+                # 确保内容是有效的M3U格式
+                if not content.strip().startswith('#EXTM3U'):
+                    content = '#EXTM3U\n' + content
+                
+                # 保存原始播放列表
+                original_path = os.path.join(output_dir, f"original_{filename}")
+                with open(original_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                
+                # 处理播放列表
+                if process_playlist(original_path, output_path, num_threads, ffmpeg_timeout):
+                    success_count += 1
+                else:
+                    failed_urls.append((url, "处理失败"))
+                    
+            except requests.RequestException as e:
+                print(f"{Fore.RED}下载播放列表失败: {e}{Style.RESET_ALL}")
+                failed_urls.append((url, f"下载失败: {str(e)}"))
+                continue
+                
         except Exception as e:
             print(f"{Fore.RED}处理URL失败: {url}\n错误: {e}{Style.RESET_ALL}")
+            failed_urls.append((url, f"未知错误: {str(e)}"))
             continue
+
+    # 生成错误报告
+    if failed_urls:
+        error_report_path = os.path.join(output_dir, "error_report.txt")
+        with open(error_report_path, 'w', encoding='utf-8') as f:
+            f.write(f"检查时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"总URL数: {total_urls}\n")
+            f.write(f"成功数: {success_count}\n")
+            f.write(f"失败数: {len(failed_urls)}\n\n")
+            f.write("失败详情:\n")
+            for url, error in failed_urls:
+                f.write(f"URL: {url}\n错误: {error}\n\n")
+
+    print(f"\n{Fore.CYAN}检查完成!{Style.RESET_ALL}")
+    print(f"总URL数: {total_urls}")
+    print(f"成功数: {success_count}")
+    print(f"失败数: {len(failed_urls)}")
+    
+    # 只要有一个成功就返回True
+    return success_count > 0
 
 def main():
     parser = argparse.ArgumentParser(description="IPTV播放列表检查工具")
@@ -650,18 +699,28 @@ def main():
     parser.add_argument('-u', '--url-list', help="包含多个URL的配置文件路径")
     args = parser.parse_args()
 
-    if args.url_list:
-        process_url_list(args.url_list, 'output', args.threads, args.ffmpeg_timeout)
-    elif args.file:
-        input_dir = 'input'
-        output_dir = 'output'
-        os.makedirs(output_dir, exist_ok=True)
-        process_files_in_directory(input_dir, output_dir, args.threads, args.ffmpeg_timeout)
-    else:
-        if not args.playlist:
-            parser.error("除非使用-file或-u选项,否则必须提供播放列表URL或文件路径。")
-        process_playlist(args.playlist, args.save, args.threads, args.ffmpeg_timeout)
-
+    try:
+        if args.url_list:
+            success = process_url_list(args.url_list, 'output', args.threads, args.ffmpeg_timeout)
+        elif args.file:
+            input_dir = 'input'
+            output_dir = 'output'
+            os.makedirs(output_dir, exist_ok=True)
+            success = process_files_in_directory(input_dir, output_dir, args.threads, args.ffmpeg_timeout)
+        else:
+            if not args.playlist:
+                parser.error("除非使用-file或-u选项,否则必须提供播放列表URL或文件路径。")
+            success = process_playlist(args.playlist, args.save, args.threads, args.ffmpeg_timeout)
+        
+        # 根据处理结果设置退出码
+        sys.exit(0 if success else 1)
+            
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}用户中断操作{Style.RESET_ALL}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"{Fore.RED}发生错误: {e}{Style.RESET_ALL}")
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()

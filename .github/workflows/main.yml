@@ -11,7 +11,12 @@ on:
         description: 'FFmpeg超时时间(秒)'
         type: number
         required: true
-        default: '25'  
+        default: '45'  # 增加默认超时时间
+      MAX_RETRIES:
+        description: '检查失败时的最大重试次数'
+        type: number
+        required: true
+        default: '3'
   schedule:
     # 每天北京时间14:00 (UTC+8) 运行，对应 UTC 06:00
     - cron: '0 6 * * *'
@@ -20,6 +25,7 @@ jobs:
   build:  
     name: IPTV播放列表检查
     runs-on: ubuntu-latest
+    continue-on-error: true  # 允许部分错误继续运行
 
     steps:
       - name: 检出代码 ♻️
@@ -48,10 +54,34 @@ jobs:
         run: |
           echo "开始批量检查播放列表..."
           echo "当前时间: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-          python iptvcheck.py -u config/input.txt -t $NUM_THREADS -ft $TIMEOUT
+          echo "配置信息:"
+          echo "- 线程数: $NUM_THREADS"
+          echo "- 超时时间: $TIMEOUT 秒"
+          echo "- 最大重试次数: $MAX_RETRIES 次"
+          
+          # 创建日志目录
+          mkdir -p logs
+          
+          # 运行检查脚本，如果失败则重试
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "第 $i 次尝试..."
+            if python iptvcheck.py -u config/input.txt -t $NUM_THREADS -ft $TIMEOUT 2>&1 | tee logs/check_$i.log; then
+              echo "检查完成！"
+              break
+            else
+              echo "第 $i 次检查失败"
+              if [ $i -eq $MAX_RETRIES ]; then
+                echo "已达到最大重试次数"
+              else
+                echo "等待30秒后重试..."
+                sleep 30
+              fi
+            fi
+          done
         env:
           NUM_THREADS: ${{ inputs.NUM_THREADS }}
           TIMEOUT: ${{ inputs.TIMEOUT }}
+          MAX_RETRIES: ${{ inputs.MAX_RETRIES }}
 
       - name: 检查文件和文件夹 📂
         run: |
@@ -65,6 +95,27 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
            name: iptv-check-results
-           path: output/*.m3u8
+           path: |
+             output/*.m3u8
+             logs/*.log
            retention-days: 0
            compression-level: 6
+
+      - name: 生成检查报告 📊
+        if: always()
+        run: |
+          echo "# IPTV播放列表检查报告" > check_report.md
+          echo "## 检查时间" >> check_report.md
+          echo "$(date '+%Y-%m-%d %H:%M:%S %Z')" >> check_report.md
+          echo "## 检查结果" >> check_report.md
+          echo "\`\`\`" >> check_report.md
+          cat logs/check_*.log >> check_report.md
+          echo "\`\`\`" >> check_report.md
+
+      - name: 上传检查报告 📋
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-report
+          path: check_report.md
+          retention-days: 0
