@@ -1,7 +1,7 @@
-# IPTVCheck v1.0
-# THIS CODE/WORK IS LICENSED UNDER THE GNU Affero General Public License v3.0 (GNU AGPLv3)
-# Copyright (c) 2025 MustardChef
-# THE GNU AGPLv3 LICENSE APPLICABLE TO THIS CODE/WORK CAN BE FOUND IN THE LICENSE FILE IN THE ROOT DIRECTORY OF THIS GITHUB REPOSITORY
+# IPTV检查工具 v1.0
+# 本代码基于 GNU Affero General Public License v3.0 (GNU AGPLv3) 许可证开源
+# 版权所有 (c) 2025 MustardChef
+# GNU AGPLv3 许可证可在本仓库根目录的 LICENSE 文件中找到
 
 
 import os, requests, argparse, logging, concurrent.futures, subprocess, time, signal, sys, threading, urllib3, shutil
@@ -34,7 +34,7 @@ class Stats:
         self.skipped = 0
 
     def reset(self):
-        """Сброс статистики для нового запуска."""
+        """重置统计数据"""
         self.working = 0
         self.failed = 0
         self.timeout = 0
@@ -42,26 +42,26 @@ class Stats:
 
     def log_summary(self):
         total = self.working + self.failed + self.timeout + self.skipped
-        logging.info("=== Summary ===")
-        logging.info(f"Total channels: {total}")
+        logging.info("=== 统计摘要 ===")
+        logging.info(f"总频道数: {total}")
         if total > 0:
-            logging.info(f"Working: {self.working} ({self.working / total * 100:.2f}%)")
-            logging.info(f"Failed: {self.failed} ({self.failed / total * 100:.2f}%)")
-            logging.info(f"Timeouts: {self.timeout} ({self.timeout / total * 100:.2f}%)")
-            logging.info(f"Skipped: {self.skipped} ({self.skipped / total * 100:.2f}%)")
+            logging.info(f"可用: {self.working} ({self.working / total * 100:.2f}%)")
+            logging.info(f"失效: {self.failed} ({self.failed / total * 100:.2f}%)")
+            logging.info(f"超时: {self.timeout} ({self.timeout / total * 100:.2f}%)")
+            logging.info(f"跳过: {self.skipped} ({self.skipped / total * 100:.2f}%)")
         else:
-            logging.info("No channels processed.")
+            logging.info("未处理任何频道。")
 
     def print_summary(self):
         total = self.working + self.failed + self.timeout + self.skipped
-        print(f"\n{Fore.YELLOW}=== Statistics ==={Style.RESET_ALL}")
+        print(f"\n{Fore.YELLOW}=== 统计信息 ==={Style.RESET_ALL}")
         print(
-            f"{Fore.GREEN}Working channels added: {self.working} ({self.working / total * 100:.2f}%)" if total > 0 else "No channels processed.")
+            f"{Fore.GREEN}可用频道数: {self.working} ({self.working / total * 100:.2f}%)" if total > 0 else "未处理任何频道。")
         print(
-            f"{Fore.RED}Failed channels removed: {self.failed} ({self.failed / total * 100:.2f}%)" if total > 0 else "")
-        print(f"{Fore.BLUE}Timeouts: {self.timeout} ({self.timeout / total * 100:.2f}%)" if total > 0 else "")
+            f"{Fore.RED}失效频道数: {self.failed} ({self.failed / total * 100:.2f}%)" if total > 0 else "")
+        print(f"{Fore.BLUE}超时频道数: {self.timeout} ({self.timeout / total * 100:.2f}%)" if total > 0 else "")
         print(
-            f"{Fore.YELLOW}Skipped channels: {self.skipped} ({self.skipped / total * 100:.2f}%){Style.RESET_ALL}" if total > 0 else "")
+            f"{Fore.YELLOW}跳过频道数: {self.skipped} ({self.skipped / total * 100:.2f}%){Style.RESET_ALL}" if total > 0 else "")
 
 
 stats = Stats()
@@ -582,13 +582,33 @@ def extract_headers_from_options(options: list) -> dict:
     
     return headers
 
+def process_files_in_directory(input_dir: str, output_dir: str, num_threads: int, ffmpeg_timeout: int):
+    """处理指定目录中的所有播放列表文件"""
+    if not os.path.exists(input_dir):
+        print(f"{Fore.RED}输入目录 {input_dir} 不存在!{Style.RESET_ALL}")
+        return
+
+    os.makedirs(output_dir, exist_ok=True)
+    playlist_files = [f for f in os.listdir(input_dir) if f.endswith(('.m3u', '.m3u8'))]
+
+    if not playlist_files:
+        print(f"{Fore.YELLOW}在 {input_dir} 目录中未找到播放列表文件。{Style.RESET_ALL}")
+        return
+
+    for playlist_file in playlist_files:
+        input_path = os.path.join(input_dir, playlist_file)
+        output_path = os.path.join(output_dir, f"checked_{playlist_file}")
+        
+        print(f"\n{Fore.CYAN}正在处理: {playlist_file}{Style.RESET_ALL}")
+        process_playlist(input_path, output_path, num_threads, ffmpeg_timeout)
+
 def main():
-    parser = argparse.ArgumentParser(description="IPTV playlist checker")
-    parser.add_argument('-p', '--playlist', help="URL or path to the playlist file")
-    parser.add_argument('-s', '--save', help="Path to save the checked playlist")
-    parser.add_argument('-t', '--threads', type=int, default=NUM_THREADS, help="Number of threads for checking streams")
-    parser.add_argument('-ft', '--ffmpeg-timeout', type=int, default=FFMPEG_TIMEOUT, help="Timeout for ffmpeg (in seconds)")
-    parser.add_argument('-file', action="store_true", help="Process all playlist files from the input folder")
+    parser = argparse.ArgumentParser(description="IPTV播放列表检查工具")
+    parser.add_argument('-p', '--playlist', help="播放列表的URL或文件路径")
+    parser.add_argument('-s', '--save', help="保存检查结果的文件路径")
+    parser.add_argument('-t', '--threads', type=int, default=NUM_THREADS, help="检查流的线程数")
+    parser.add_argument('-ft', '--ffmpeg-timeout', type=int, default=FFMPEG_TIMEOUT, help="FFmpeg超时时间(秒)")
+    parser.add_argument('-file', action="store_true", help="处理input文件夹中的所有播放列表文件")
     args = parser.parse_args()
 
     if args.file:
@@ -598,7 +618,7 @@ def main():
         process_files_in_directory(input_dir, output_dir, args.threads, args.ffmpeg_timeout)
     else:
         if not args.playlist:
-            parser.error("Playlist URL or file path is required unless using -file option.")
+            parser.error("除非使用-file选项,否则必须提供播放列表URL或文件路径。")
         process_playlist(args.playlist, args.save, args.threads, args.ffmpeg_timeout)
 
 

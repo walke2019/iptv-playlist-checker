@@ -1,18 +1,18 @@
-name: IPTV Playlist Checker
+name: IPTV播放列表检查器
 on:
   workflow_dispatch:
     inputs:
       PLAYLIST_URL:
-        description: 'URL of the playlist to check'
+        description: '要检查的播放列表URL'
         required: true
         default: 'https://iptv-org.github.io/iptv/index.m3u'
       NUM_THREADS:
-        description: 'Number of threads to use'
+        description: '使用的线程数'
         type: number
         required: true
         default: '4'
       TIMEOUT:
-        description: 'Timeout for FFmpeg'
+        description: 'FFmpeg超时时间'
         type: number
         required: true
         default: '25'  
@@ -21,49 +21,49 @@ on:
 
 jobs:
   build:  
-    name: IPTV Playlist Check
+    name: IPTV播放列表检查
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout ♻️
+      - name: 检出代码 ♻️
         uses: actions/checkout@v4
 
-      - name: Setup Python 🐍
-        uses: actions/setup-python@v5
+      - name: 配置Python环境 🐍
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.13' 
+          python-version: '3.11'
 
-      - name: Install FFMPEG Dependencies 🧑‍🏭
+      - name: 安装FFMPEG依赖 🧑‍🏭
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      - name: Install Python Dependencies 🧑‍🏭    
+      - name: 安装Python依赖 🧑‍🏭    
         run:
             pip install -r requirements.txt
 
-      - name: Download playlist to check 📥
+      - name: 下载待检查播放列表 📥
         run: |
           wget -q $PLAYLIST_URL -O playlist.m3u8
         env:
           PLAYLIST_URL: ${{ inputs.PLAYLIST_URL }}    
 
-      - name: Download script and check playlist 📺    
+      - name: 运行检查脚本 📺    
         run: |
           python iptvcheck.py -p playlist.m3u8 -s playlistchecked.m3u8 -t $NUM_THREADS -ft $TIMEOUT
         env:
           NUM_THREADS: ${{ inputs.NUM_THREADS }}
           TIMEOUT: ${{ inputs.TIMEOUT }}  
 
-      - name: Check Files and Folders and Subfolders 📂
+      - name: 检查文件和文件夹 📂
         run: |
           ls -lahR
   
-#     - name: Compare the results 🧐
+#     - name: 比较结果 🧐
 #       run: |
 #         python compareplaylists.py    
 
-      - name: Upload Results to artifacts 📤
+      - name: 上传结果到构建产物 📤
         uses: actions/upload-artifact@v4
         with:
            name: playlistchecked
