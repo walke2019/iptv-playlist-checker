@@ -1,0 +1,8 @@
+https://gh.tryxd.cn/https://raw.githubusercontent.com/butterfly202400/dsy/refs/heads/main/ln2403.m3u
+http://209.141.59.146:50509/?type=m3u
+https://smart.pendy.dpdns.org/m3u/Smart.m3u
+https://judy.livednow.dpdns.org/ysp.m3u
+https://9877.kstore.space/Live/live.m3u8
+https://wget.la/https://github.com/Kimentanm/aptv/raw/master/m3u/iptv.m3u
+https://gh.tryxd.cn/https://raw.githubusercontent.com/peterHchina/iptv/refs/heads/main/IPTV-V4.m3u
+https://live.hacks.tools/iptv/languages/zho.m3u

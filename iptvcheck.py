@@ -602,6 +602,44 @@ def process_files_in_directory(input_dir: str, output_dir: str, num_threads: int
         print(f"\n{Fore.CYAN}正在处理: {playlist_file}{Style.RESET_ALL}")
         process_playlist(input_path, output_path, num_threads, ffmpeg_timeout)
 
+def process_url_list(config_file: str, output_dir: str, num_threads: int, ffmpeg_timeout: int):
+    """处理配置文件中的URL列表"""
+    if not os.path.exists(config_file):
+        print(f"{Fore.RED}配置文件 {config_file} 不存在!{Style.RESET_ALL}")
+        return
+
+    os.makedirs(output_dir, exist_ok=True)
+    
+    try:
+        with open(config_file, 'r', encoding='utf-8') as f:
+            urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+    except Exception as e:
+        print(f"{Fore.RED}读取配置文件失败: {e}{Style.RESET_ALL}")
+        return
+
+    if not urls:
+        print(f"{Fore.YELLOW}配置文件中未找到有效的URL。{Style.RESET_ALL}")
+        return
+
+    total_urls = len(urls)
+    print(f"{Fore.CYAN}共找到 {total_urls} 个播放列表URL{Style.RESET_ALL}")
+
+    for index, url in enumerate(urls, 1):
+        try:
+            print(f"\n{Fore.CYAN}[{index}/{total_urls}] 正在处理: {url}{Style.RESET_ALL}")
+            
+            # 从URL中提取文件名，如果无法提取则使用索引号
+            filename = url.split('/')[-1]
+            if not filename.endswith(('.m3u', '.m3u8')):
+                filename = f"playlist_{index}.m3u8"
+            
+            output_path = os.path.join(output_dir, f"checked_{filename}")
+            process_playlist(url, output_path, num_threads, ffmpeg_timeout)
+            
+        except Exception as e:
+            print(f"{Fore.RED}处理URL失败: {url}\n错误: {e}{Style.RESET_ALL}")
+            continue
+
 def main():
     parser = argparse.ArgumentParser(description="IPTV播放列表检查工具")
     parser.add_argument('-p', '--playlist', help="播放列表的URL或文件路径")
@@ -609,16 +647,19 @@ def main():
     parser.add_argument('-t', '--threads', type=int, default=NUM_THREADS, help="检查流的线程数")
     parser.add_argument('-ft', '--ffmpeg-timeout', type=int, default=FFMPEG_TIMEOUT, help="FFmpeg超时时间(秒)")
     parser.add_argument('-file', action="store_true", help="处理input文件夹中的所有播放列表文件")
+    parser.add_argument('-u', '--url-list', help="包含多个URL的配置文件路径")
     args = parser.parse_args()
 
-    if args.file:
+    if args.url_list:
+        process_url_list(args.url_list, 'output', args.threads, args.ffmpeg_timeout)
+    elif args.file:
         input_dir = 'input'
         output_dir = 'output'
         os.makedirs(output_dir, exist_ok=True)
         process_files_in_directory(input_dir, output_dir, args.threads, args.ffmpeg_timeout)
     else:
         if not args.playlist:
-            parser.error("除非使用-file选项,否则必须提供播放列表URL或文件路径。")
+            parser.error("除非使用-file或-u选项,否则必须提供播放列表URL或文件路径。")
         process_playlist(args.playlist, args.save, args.threads, args.ffmpeg_timeout)
 
 

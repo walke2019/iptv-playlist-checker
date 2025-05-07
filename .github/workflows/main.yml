@@ -2,22 +2,19 @@ name: IPTV播放列表检查器
 on:
   workflow_dispatch:
     inputs:
-      PLAYLIST_URL:
-        description: '要检查的播放列表URL'
-        required: true
-        default: 'https://iptv-org.github.io/iptv/index.m3u'
       NUM_THREADS:
         description: '使用的线程数'
         type: number
         required: true
         default: '4'
       TIMEOUT:
-        description: 'FFmpeg超时时间'
+        description: 'FFmpeg超时时间(秒)'
         type: number
         required: true
         default: '25'  
-# schedule:
-#   - cron: '0 0 * * *'
+  schedule:
+    # 每天北京时间14:00 (UTC+8) 运行，对应 UTC 06:00
+    - cron: '0 6 * * *'
 
 jobs:
   build:  
@@ -27,6 +24,11 @@ jobs:
     steps:
       - name: 检出代码 ♻️
         uses: actions/checkout@v4
+
+      - name: 设置时区 🕒
+        uses: szenius/set-timezone@v1.2
+        with:
+          timezoneLinux: "Asia/Shanghai"
 
       - name: 配置Python环境 🐍
         uses: actions/setup-python@v4
@@ -39,21 +41,17 @@ jobs:
           sudo apt-get install -y ffmpeg
 
       - name: 安装Python依赖 🧑‍🏭    
-        run:
-            pip install -r requirements.txt
-
-      - name: 下载待检查播放列表 📥
         run: |
-          wget -q $PLAYLIST_URL -O playlist.m3u8
-        env:
-          PLAYLIST_URL: ${{ inputs.PLAYLIST_URL }}    
+          pip install -r requirements.txt
 
       - name: 运行检查脚本 📺    
         run: |
-          python iptvcheck.py -p playlist.m3u8 -s playlistchecked.m3u8 -t $NUM_THREADS -ft $TIMEOUT
+          echo "开始批量检查播放列表..."
+          echo "当前时间: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+          python iptvcheck.py -u config/input.txt -t $NUM_THREADS -ft $TIMEOUT
         env:
           NUM_THREADS: ${{ inputs.NUM_THREADS }}
-          TIMEOUT: ${{ inputs.TIMEOUT }}  
+          TIMEOUT: ${{ inputs.TIMEOUT }}
 
       - name: 检查文件和文件夹 📂
         run: |
@@ -63,10 +61,10 @@ jobs:
 #       run: |
 #         python compareplaylists.py    
 
-      - name: 上传结果到构建产物 📤
+      - name: 上传检查结果 📤
         uses: actions/upload-artifact@v4
         with:
-           name: playlistchecked
-           path: playlistchecked.m3u8
+           name: iptv-check-results
+           path: output/*.m3u8
            retention-days: 0
            compression-level: 6
